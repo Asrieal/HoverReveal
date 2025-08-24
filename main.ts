@@ -60,7 +60,7 @@ export default class HoverRevealPlugin extends Plugin {
 				const text = textNode.textContent;
 				if (!text) return;
 
-				const regex = /\[(.*?)\]\{(.*?)\}/g;
+				const regex = /(?<!\[)\[([^[\]{}]+)\]\{([^}]*)\}/g;
 				let match;
 				let lastIndex = 0;
 				const fragments = [];
@@ -323,7 +323,7 @@ export default class HoverRevealPlugin extends Plugin {
 				buildDecorations(view: EditorView) {
 					const widgets = [];
 					const content = view.state.doc.toString();
-					const regex = /\[(.*?)\]\{(.*?)\}/g;
+					const regex = /(?<!\[)\[([^[\]{}]+)\]\{([^}]*)\}/g;
 					let match;
 
 					while ((match = regex.exec(content)) !== null) {
