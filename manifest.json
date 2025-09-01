@@ -1,7 +1,7 @@
 {
 	"id": "hover-reveal",
 	"name": "Hover Reveal",
-	"version": "1.0.7",
+	"version": "1.0.9",
 	"minAppVersion": "0.15.0",
 	"description": "Shows hidden text in tooltips when hovering over marked elements using [visibleText]{tooltipText} syntax.",
 	"author": "Shawn Yang",
