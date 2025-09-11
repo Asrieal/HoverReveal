@@ -23,6 +23,25 @@ Example:
 
 ![image](https://github.com/user-attachments/assets/20f32437-07ee-4d51-9549-67a102f649ff)
 
+#### Commands & Hotkeys
+
+The plugin provides two commands that you can assign custom hotkeys to:
+
+1. **Insert Hover Reveal Syntax**
+   - Inserts `[]{}` template at cursor position
+   - If text is selected, wraps it as `[selectedText]{}` and positions cursor in tooltip area
+   - Access via Command Palette (Ctrl/Cmd + P) or assign a custom hotkey
+
+2. **Navigate in Hover Reveal Syntax**
+   - Toggles cursor between visible text and tooltip text within existing `[text]{tooltip}` syntax
+   - Useful for quick editing of hover reveal elements
+   - Only works when cursor is positioned within a hover reveal syntax
+
+**To assign custom hotkeys:**
+1. Go to Settings → Hotkeys
+2. Search for "Hover Reveal" 
+3. Assign your preferred key combinations to the commands
+
 
 ### Features
 - Hover to reveal hidden text
@@ -67,6 +86,25 @@ Use the Reset button to restore default settings.
 - 效果：显示"你好"（带下划线和加粗），鼠标悬停时会显示"这是一个提示"
 
 ![image](https://github.com/user-attachments/assets/44d3d380-7452-4fd3-911f-eef3498c2467)
+
+#### 命令和快捷键
+
+插件提供两个命令，你可以为它们分配自定义快捷键：
+
+1. **插入悬浮提示语法**
+   - 在光标位置插入 `[]{}` 模板
+   - 如果选中了文本，会自动包装为 `[选中文本]{}` 并将光标定位到提示区域
+   - 可通过命令面板 (Ctrl/Cmd + P) 访问或分配自定义快捷键
+
+2. **在悬浮提示语法中导航**
+   - 在现有的 `[文本]{提示}` 语法中，在可见文本和提示文本之间切换光标位置
+   - 便于快速编辑悬浮提示元素
+   - 仅在光标位于悬浮提示语法内时有效
+
+**分配自定义快捷键：**
+1. 进入 设置 → 快捷键
+2. 搜索 "Hover Reveal"
+3. 为命令分配你偏好的按键组合
 
 
 ### 功能特点
