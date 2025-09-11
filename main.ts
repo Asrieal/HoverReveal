@@ -158,6 +158,24 @@ export default class HoverRevealPlugin extends Plugin {
 		});
 
 		this.registerEditorExtension(this.hoverRevealExtension());
+
+		// Register command for inserting hover reveal syntax
+		this.addCommand({
+			id: 'insert-hover-reveal',
+			name: 'Insert Hover Reveal Syntax',
+			editorCallback: (editor: Editor, view: MarkdownView) => {
+				this.insertHoverRevealSyntax(editor);
+			}
+		});
+
+		// Register command for navigating within hover reveal syntax
+		this.addCommand({
+			id: 'navigate-hover-reveal',
+			name: 'Navigate in Hover Reveal Syntax',
+			editorCallback: (editor: Editor, view: MarkdownView) => {
+				this.navigateHoverRevealSyntax(editor);
+			}
+		});
 	}
 
 	onunload() {
@@ -177,6 +195,104 @@ export default class HoverRevealPlugin extends Plugin {
 
 	async saveSettings() {
 		await this.saveData(this.settings);
+	}
+
+	// Method to insert hover reveal syntax
+	private insertHoverRevealSyntax(editor: Editor): void {
+		const cursor = editor.getCursor();
+		const selectedText = editor.getSelection();
+		
+		if (selectedText) {
+			// If text is selected, wrap it as visible text and add empty tooltip
+			const hoverSyntax = `[${selectedText}]{}`;
+			editor.replaceSelection(hoverSyntax);
+			
+			// Position cursor inside the tooltip brackets for immediate editing
+			// Use current cursor position after replacement (which is at the end of inserted text)
+			const currentCursor = editor.getCursor();
+			const newCursor = {
+				line: currentCursor.line,
+				ch: currentCursor.ch - 1 // Move back one position to be inside {}
+			};
+			editor.setCursor(newCursor);
+			
+			// Show a notice to guide the user
+			new Notice('Hover syntax inserted! Type your tooltip text.');
+		} else {
+			// If no text is selected, insert template and position cursor
+			const hoverSyntax = `[]{}`;
+			editor.replaceRange(hoverSyntax, cursor);
+			
+			// Position cursor inside the visible text brackets
+			const newCursor = {
+				line: cursor.line,
+				ch: cursor.ch + 1 // Position inside [
+			};
+			editor.setCursor(newCursor);
+			
+			// Show a notice to guide the user
+			new Notice('Hover syntax inserted! Type visible text, then Tab to tooltip.');
+		}
+	}
+
+	// Method to navigate within hover reveal syntax
+	private navigateHoverRevealSyntax(editor: Editor): void {
+		const cursor = editor.getCursor();
+		const line = editor.getLine(cursor.line);
+		
+		// Find hover reveal syntax on current line
+		const regex = /\[([^[\]{}]*)\]\{([^}]*)\}/g;
+		let match;
+		let foundMatch = null;
+		
+		while ((match = regex.exec(line)) !== null) {
+			const matchStart = match.index;
+			const matchEnd = match.index + match[0].length;
+			
+			// Check if cursor is within this match
+			if (cursor.ch >= matchStart && cursor.ch <= matchEnd) {
+				foundMatch = {
+					fullMatch: match[0],
+					visibleText: match[1],
+					tooltipText: match[2],
+					start: matchStart,
+					end: matchEnd,
+					visibleStart: matchStart + 1, // After [
+					visibleEnd: matchStart + 1 + match[1].length, // Before ]
+					tooltipStart: matchStart + match[1].length + 3, // After ]{
+					tooltipEnd: matchStart + match[1].length + 3 + match[2].length // Before }
+				};
+				break;
+			}
+		}
+		
+		if (foundMatch) {
+			// Determine current position and navigate accordingly
+			if (cursor.ch >= foundMatch.visibleStart && cursor.ch <= foundMatch.visibleEnd) {
+				// Currently in visible text, move to tooltip
+				editor.setCursor({
+					line: cursor.line,
+					ch: foundMatch.tooltipStart
+				});
+				new Notice('Moved to tooltip text area');
+			} else if (cursor.ch >= foundMatch.tooltipStart && cursor.ch <= foundMatch.tooltipEnd) {
+				// Currently in tooltip, move to visible text
+				editor.setCursor({
+					line: cursor.line,
+					ch: foundMatch.visibleStart
+				});
+				new Notice('Moved to visible text area');
+			} else {
+				// Cursor is at brackets, move to visible text by default
+				editor.setCursor({
+					line: cursor.line,
+					ch: foundMatch.visibleStart
+				});
+				new Notice('Moved to visible text area');
+			}
+		} else {
+			new Notice('No hover reveal syntax found at cursor position');
+		}
 	}
 
 	private hoverRevealExtension(): Extension {
