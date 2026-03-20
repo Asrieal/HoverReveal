@@ -7,7 +7,7 @@ import {
 	Plugin,
 	PluginSettingTab,
 	Setting,
-	MarkdownPostProcessor,
+	MarkdownPostProcessorContext,
 	MarkdownRenderChild,
 	MarkdownRenderer,
 } from "obsidian";
@@ -35,127 +35,23 @@ const DEFAULT_SETTINGS: HoverRevealSettings = {
 	boldTextColor: "var(--bold-color)",
 };
 
+const HOVER_REVEAL_REGEX = /(?<!\[)\[([^[\]{}]+)\]\{([^}]*)\}/g;
+const HOVER_RESET_DELAY = 200;
+const PREVIEW_SKIP_SELECTOR =
+	".hover-reveal-container, code, pre, script, style";
+
 export default class HoverRevealPlugin extends Plugin {
 	settings: HoverRevealSettings;
 
 	async onload() {
 		await this.loadSettings();
+		this.updateStyles();
 
 		this.addSettingTab(new HoverRevealSettingTab(this.app, this));
 
-		this.registerMarkdownPostProcessor((element, context) => {
-			const walker = document.createTreeWalker(
-				element,
-				NodeFilter.SHOW_TEXT,
-				null
-			);
-
-			const nodesToProcess = [];
-			let node;
-			while ((node = walker.nextNode())) {
-				nodesToProcess.push(node);
-			}
-
-			nodesToProcess.forEach((textNode) => {
-				const text = textNode.textContent;
-				if (!text) return;
-
-				const regex = /(?<!\[)\[([^[\]{}]+)\]\{([^}]*)\}/g;
-				let match;
-				let lastIndex = 0;
-				const fragments = [];
-
-				while ((match = regex.exec(text)) !== null) {
-					if (match.index > lastIndex) {
-						fragments.push(
-							document.createTextNode(
-								text.slice(lastIndex, match.index)
-							)
-						);
-					}
-
-					const [fullMatch, visibleText, tooltipText] = match;
-
-					const container = document.createElement("span");
-					container.classList.add("hover-reveal-container");
-
-					const renderedElement = document.createElement("span");
-					renderedElement.classList.add("hover-reveal");
-					renderedElement.textContent = visibleText;
-
-					const tooltip = document.createElement("div");
-					tooltip.classList.add("hover-reveal-tooltip");
-					MarkdownRenderer.render(
-						this.app,
-						tooltipText,
-						tooltip,
-						"",
-						this
-					);
-
-					renderedElement.appendChild(tooltip);
-					container.appendChild(renderedElement);
-
-					container.addEventListener("mouseover", () => {
-						const tooltipRect = tooltip.getBoundingClientRect();
-						if (tooltipRect.width === 0) return;
-
-						const mainContentArea = document.querySelector('.workspace-split.mod-vertical.mod-root') as HTMLElement;
-						if (!mainContentArea) return;
-						
-						const mainContentRect = mainContentArea.getBoundingClientRect();
-						const mainContentLeft = mainContentRect.left;
-						const mainContentRight = mainContentRect.right;
-
-						if (tooltipRect.left < mainContentLeft) {
-							tooltip.style.left = `0`;
-							tooltip.style.transform = "translateX(0)";
-						} else if (tooltipRect.right > mainContentRight) {
-							tooltip.style.left = "auto";
-							tooltip.style.right = `0`;
-							tooltip.style.transform = "translateX(0)";
-						}
-					});
-
-					container.addEventListener("mouseout", (event) => {
-						// Check if mouse moved to tooltip
-						const relatedTarget = event.relatedTarget as HTMLElement;
-						if (relatedTarget && tooltip.contains(relatedTarget)) {
-							return; // If mouse moved to tooltip, don't hide
-						}
-						
-						// Hide tooltip first
-						tooltip.style.visibility = "hidden";
-						tooltip.style.opacity = "0";
-						
-						// Delay resetting styles to avoid user seeing style changes
-						setTimeout(() => {
-							tooltip.style.left = "50%";
-							tooltip.style.right = "auto";
-							tooltip.style.transform = "translateX(-50%)";
-							tooltip.style.visibility = "";
-							tooltip.style.opacity = "";
-						}, 200); // 200ms delay to match CSS transition time
-					});
-
-					fragments.push(container);
-
-					lastIndex = match.index + fullMatch.length;
-				}
-
-				if (lastIndex < text.length) {
-					fragments.push(
-						document.createTextNode(text.slice(lastIndex))
-					);
-				}
-
-				if (fragments.length > 0 && textNode.parentNode) {
-					const fragment = document.createDocumentFragment();
-					fragments.forEach((f) => fragment.appendChild(f));
-					textNode.parentNode.replaceChild(fragment, textNode);
-				}
-			});
-		});
+		this.registerMarkdownPostProcessor((element, context) =>
+			this.processPreviewHoverReveal(element, context)
+		);
 
 		this.registerEditorExtension(this.hoverRevealExtension());
 
@@ -195,6 +91,301 @@ export default class HoverRevealPlugin extends Plugin {
 
 	async saveSettings() {
 		await this.saveData(this.settings);
+		this.updateStyles();
+	}
+
+	private createHoverRevealRegex(): RegExp {
+		return new RegExp(HOVER_REVEAL_REGEX.source, HOVER_REVEAL_REGEX.flags);
+	}
+
+	private shouldSkipPreviewElement(element: HTMLElement): boolean {
+		return Boolean(element.closest(PREVIEW_SKIP_SELECTOR));
+	}
+
+	private async processPreviewHoverReveal(
+		element: HTMLElement,
+		context: MarkdownPostProcessorContext
+	): Promise<void> {
+		const walker = document.createTreeWalker(element, NodeFilter.SHOW_ELEMENT);
+		const elementsToProcess: HTMLElement[] = [];
+		let currentNode: Node | null;
+
+		if (!this.shouldSkipPreviewElement(element)) {
+			elementsToProcess.push(element);
+		}
+
+		while ((currentNode = walker.nextNode())) {
+			if (!(currentNode instanceof HTMLElement)) {
+				continue;
+			}
+
+			if (this.shouldSkipPreviewElement(currentNode)) {
+				continue;
+			}
+
+			elementsToProcess.push(currentNode);
+		}
+
+		for (const currentElement of elementsToProcess.reverse()) {
+			this.replacePreviewMatchesInElement(currentElement, context);
+		}
+	}
+
+	private replacePreviewMatchesInElement(
+		element: HTMLElement,
+		context: MarkdownPostProcessorContext
+	): void {
+		if (this.shouldSkipPreviewElement(element)) {
+			return;
+		}
+
+		const text = element.textContent;
+		if (!text) {
+			return;
+		}
+
+		const regex = this.createHoverRevealRegex();
+		const matches = Array.from(text.matchAll(regex));
+		if (matches.length === 0) {
+			return;
+		}
+
+		for (const match of matches.reverse()) {
+			this.replacePreviewMatch(element, match, context);
+		}
+	}
+
+	private replacePreviewMatch(
+		element: HTMLElement,
+		match: RegExpMatchArray,
+		context: MarkdownPostProcessorContext
+	): void {
+		if (match.index === undefined) {
+			return;
+		}
+
+		const visibleText = match[1];
+		const tooltipText = match[2];
+		const visibleStart = match.index + 1;
+		const visibleEnd = visibleStart + visibleText.length;
+		const tooltipStart = visibleEnd + 2;
+		const tooltipEnd = tooltipStart + tooltipText.length;
+		const fullEnd = match.index + match[0].length;
+
+		const fullRange = this.createTextRange(element, match.index, fullEnd);
+		if (!fullRange) {
+			return;
+		}
+
+		const fullFragment = fullRange.extractContents();
+		const tooltipFragment = this.extractFragmentContents(
+			fullFragment,
+			tooltipStart - match.index,
+			tooltipEnd - match.index
+		);
+		const visibleFragment = this.extractFragmentContents(
+			fullFragment,
+			1,
+			visibleEnd - match.index
+		);
+
+		const { container, trigger, tooltip } = this.createHoverRevealElement(
+			"",
+			false
+		);
+		trigger.insertBefore(visibleFragment, tooltip);
+		tooltip.appendChild(tooltipFragment);
+		fullRange.insertNode(container);
+		context.addChild(new MarkdownRenderChild(container));
+	}
+
+	private createTextRange(
+		root: Node,
+		startOffset: number,
+		endOffset: number
+	): Range | null {
+		const start = this.resolveTextPosition(root, startOffset);
+		const end = this.resolveTextPosition(root, endOffset);
+		if (!start || !end) {
+			return null;
+		}
+
+		const range = document.createRange();
+		range.setStart(start.node, start.offset);
+		range.setEnd(end.node, end.offset);
+		return range;
+	}
+
+	private resolveTextPosition(
+		root: Node,
+		targetOffset: number
+	): { node: Text; offset: number } | null {
+		const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+		let currentNode: Node | null;
+		let remaining = targetOffset;
+		let lastTextNode: Text | null = null;
+
+		while ((currentNode = walker.nextNode())) {
+			if (!(currentNode instanceof Text)) {
+				continue;
+			}
+
+			lastTextNode = currentNode;
+			const currentText = currentNode.textContent ?? "";
+			if (remaining <= currentText.length) {
+				return { node: currentNode, offset: remaining };
+			}
+
+			remaining -= currentText.length;
+		}
+
+		if (!lastTextNode) {
+			return null;
+		}
+
+		return {
+			node: lastTextNode,
+			offset: lastTextNode.textContent?.length ?? 0,
+		};
+	}
+
+	private extractFragmentContents(
+		fragment: DocumentFragment,
+		startOffset: number,
+		endOffset: number
+	): DocumentFragment {
+		const range = this.createTextRange(fragment, startOffset, endOffset);
+		if (!range) {
+			return document.createDocumentFragment();
+		}
+
+		return range.extractContents();
+	}
+
+	private createHoverRevealElement(
+		visibleText: string,
+		renderVisibleMarkdown: boolean
+	): {
+		container: HTMLSpanElement;
+		trigger: HTMLSpanElement;
+		tooltip: HTMLDivElement;
+	} {
+		const container = document.createElement("span");
+		container.classList.add("hover-reveal-container");
+
+		const trigger = document.createElement("span");
+		trigger.classList.add("hover-reveal");
+
+		if (renderVisibleMarkdown) {
+			const visibleContent = document.createElement("span");
+			trigger.appendChild(visibleContent);
+			void this.renderInlineMarkdown(visibleText, visibleContent, this);
+		} else {
+			trigger.textContent = visibleText;
+		}
+
+		const tooltip = document.createElement("div");
+		tooltip.classList.add("hover-reveal-tooltip");
+		trigger.appendChild(tooltip);
+		container.appendChild(trigger);
+
+		this.attachTooltipHoverHandlers(trigger, tooltip);
+
+		return { container, trigger, tooltip };
+	}
+
+	private async renderInlineMarkdown(
+		markdown: string,
+		container: HTMLElement,
+		component: Plugin | MarkdownRenderChild
+	): Promise<void> {
+		await MarkdownRenderer.render(this.app, markdown, container, "", component);
+		const paragraph = container.firstElementChild;
+		if (
+			container.childElementCount === 1 &&
+			paragraph instanceof HTMLParagraphElement
+		) {
+			container.innerHTML = paragraph.innerHTML;
+		}
+	}
+
+	private async renderTooltipMarkdown(
+		markdown: string,
+		container: HTMLElement,
+		sourcePath: string,
+		component: Plugin | MarkdownRenderChild
+	): Promise<void> {
+		await MarkdownRenderer.render(
+			this.app,
+			markdown,
+			container,
+			sourcePath,
+			component
+		);
+	}
+
+	private attachTooltipHoverHandlers(
+		trigger: HTMLElement,
+		tooltip: HTMLElement
+	): void {
+		const adjustTooltipPosition = () => {
+			const tooltipRect = tooltip.getBoundingClientRect();
+			if (tooltipRect.width === 0) {
+				return;
+			}
+
+			const mainContentArea = document.querySelector(
+				".workspace-split.mod-vertical.mod-root"
+			) as HTMLElement | null;
+			if (!mainContentArea) {
+				return;
+			}
+
+			const mainContentRect = mainContentArea.getBoundingClientRect();
+			if (tooltipRect.left < mainContentRect.left) {
+				tooltip.style.left = "0";
+				tooltip.style.right = "auto";
+				tooltip.style.transform = "translateX(0)";
+			} else if (tooltipRect.right > mainContentRect.right) {
+				tooltip.style.left = "auto";
+				tooltip.style.right = "0";
+				tooltip.style.transform = "translateX(0)";
+			}
+		};
+
+		const resetTooltipPosition = () => {
+			tooltip.style.left = "50%";
+			tooltip.style.right = "auto";
+			tooltip.style.transform = "translateX(-50%)";
+			tooltip.style.visibility = "";
+			tooltip.style.opacity = "";
+		};
+
+		const hideTooltip = (event: MouseEvent) => {
+			const relatedTarget = event.relatedTarget;
+			if (
+				relatedTarget instanceof Node &&
+				(trigger.contains(relatedTarget) || tooltip.contains(relatedTarget))
+			) {
+				return;
+			}
+
+			tooltip.style.visibility = "hidden";
+			tooltip.style.opacity = "0";
+
+			window.setTimeout(() => {
+				if (trigger.matches(":hover") || tooltip.matches(":hover")) {
+					return;
+				}
+
+				resetTooltipPosition();
+			}, HOVER_RESET_DELAY);
+		};
+
+		trigger.addEventListener("mouseenter", adjustTooltipPosition);
+		trigger.addEventListener("mouseleave", hideTooltip);
+		tooltip.addEventListener("mouseenter", adjustTooltipPosition);
+		tooltip.addEventListener("mouseleave", hideTooltip);
 	}
 
 	// Method to insert hover reveal syntax
@@ -315,94 +506,18 @@ export default class HoverRevealPlugin extends Plugin {
 				if (this.isActive) {
 					span.textContent = `[${this.visibleText}]{${this.tooltipText}}`;
 				} else {
-					span.classList.add("hover-reveal");
-					
-					const visibleContainer = document.createElement("span");
-					MarkdownRenderer.render(plugin.app, this.visibleText, visibleContainer, "", plugin).then(() => {
-						const content = visibleContainer.querySelector('p')?.innerHTML || this.visibleText;
-						visibleContainer.innerHTML = content;
-					});
-					span.appendChild(visibleContainer);
-					
-					const tooltip = document.createElement("div");
-					tooltip.classList.add("hover-reveal-tooltip");
-					MarkdownRenderer.render(plugin.app, this.tooltipText, tooltip, "", plugin);
-					span.appendChild(tooltip);
+					const { container, tooltip } = plugin.createHoverRevealElement(
+						this.visibleText,
+						true
+					);
+					void plugin.renderTooltipMarkdown(
+						this.tooltipText,
+						tooltip,
+						"",
+						plugin
+					);
+					return container;
 				}
-
-				span.addEventListener("mouseover", () => {
-					const tooltip = span.querySelector(
-						".hover-reveal-tooltip"
-					) as HTMLElement;
-					if (!tooltip) return;
-
-					const tooltipRect = tooltip.getBoundingClientRect();
-					if (tooltipRect.width === 0) return;
-
-					const mainContentArea = document.querySelector('.workspace-split.mod-vertical.mod-root') as HTMLElement;
-					if (!mainContentArea) return;
-					
-					const mainContentRect = mainContentArea.getBoundingClientRect();
-					const mainContentLeft = mainContentRect.left;
-					const mainContentRight = mainContentRect.right;
-
-					if (tooltipRect.left < mainContentLeft) {
-						tooltip.style.left = `0`;
-						tooltip.style.transform = "translateX(0)";
-					} else if (tooltipRect.right > mainContentRight) {
-						tooltip.style.left = "auto";
-						tooltip.style.right = `0`;
-						tooltip.style.transform = "translateX(0)";
-					}
-					
-					// Add mouse leave event for tooltip
-					tooltip.addEventListener("mouseout", (event) => {
-						// Check if mouse moved to trigger element
-						const relatedTarget = event.relatedTarget as HTMLElement;
-						if (relatedTarget && span.contains(relatedTarget)) {
-							return; // If mouse moved to trigger element, don't hide
-						}
-						
-						// Hide tooltip first
-						tooltip.style.visibility = "hidden";
-						tooltip.style.opacity = "0";
-						
-						// Delay resetting styles to avoid user seeing style changes
-						setTimeout(() => {
-							tooltip.style.left = "50%";
-							tooltip.style.right = "auto";
-							tooltip.style.transform = "translateX(-50%)";
-							tooltip.style.visibility = "";
-							tooltip.style.opacity = "";
-						}, 200);
-					});
-				});
-
-				span.addEventListener("mouseout", (event) => {
-					const tooltip = span.querySelector(
-						".hover-reveal-tooltip"
-					) as HTMLElement;
-					if (!tooltip) return;
-					
-					// Check if mouse moved to tooltip
-					const relatedTarget = event.relatedTarget as HTMLElement;
-					if (relatedTarget && tooltip.contains(relatedTarget)) {
-						return; // If mouse moved to tooltip, don't hide
-					}
-					
-					// Hide tooltip first
-					tooltip.style.visibility = "hidden";
-					tooltip.style.opacity = "0";
-					
-					// Delay resetting styles to avoid user seeing style changes
-					setTimeout(() => {
-						tooltip.style.left = "50%";
-						tooltip.style.right = "auto";
-						tooltip.style.transform = "translateX(-50%)";
-						tooltip.style.visibility = "";
-						tooltip.style.opacity = "";
-					}, 200); // 200ms delay to match CSS transition time
-				});
 				
 				return span;
 			}
@@ -439,7 +554,7 @@ export default class HoverRevealPlugin extends Plugin {
 				buildDecorations(view: EditorView) {
 					const widgets = [];
 					const content = view.state.doc.toString();
-					const regex = /(?<!\[)\[([^[\]{}]+)\]\{([^}]*)\}/g;
+					const regex = plugin.createHoverRevealRegex();
 					let match;
 
 					while ((match = regex.exec(content)) !== null) {
@@ -559,9 +674,8 @@ class HoverRevealSettingTab extends PluginSettingTab {
 					// Save settings
 					await this.plugin.saveSettings();
 
-					// Update UI and styles
+					// Update UI
 					this.display();
-					this.plugin.updateStyles();
 
 					// Show notification
 					new Notice("Reset settings to default");
@@ -585,7 +699,6 @@ class HoverRevealSettingTab extends PluginSettingTab {
 						this.plugin.settings.tooltipTextColor = value;
 						textColorPicker.setValue(value);
 						await this.plugin.saveSettings();
-						this.plugin.updateStyles();
 					});
 				return textColorText;
 			})
@@ -596,7 +709,6 @@ class HoverRevealSettingTab extends PluginSettingTab {
 						this.plugin.settings.tooltipTextColor = value;
 						textColorText.setValue(value);
 						await this.plugin.saveSettings();
-						this.plugin.updateStyles();
 					});
 				return textColorPicker;
 			});
@@ -618,7 +730,6 @@ class HoverRevealSettingTab extends PluginSettingTab {
 						this.plugin.settings.tooltipBackgroundColor = value;
 						bgColorPicker.setValue(value);
 						await this.plugin.saveSettings();
-						this.plugin.updateStyles();
 					});
 				return bgColorText;
 			})
@@ -629,7 +740,6 @@ class HoverRevealSettingTab extends PluginSettingTab {
 						this.plugin.settings.tooltipBackgroundColor = value;
 						bgColorText.setValue(value);
 						await this.plugin.saveSettings();
-						this.plugin.updateStyles();
 					});
 				return bgColorPicker;
 			});
@@ -651,7 +761,6 @@ class HoverRevealSettingTab extends PluginSettingTab {
 						this.plugin.settings.tooltipBorderColor = value;
 						borderColorPicker.setValue(value);
 						await this.plugin.saveSettings();
-						this.plugin.updateStyles();
 					});
 				return borderColorText;
 			})
@@ -662,7 +771,6 @@ class HoverRevealSettingTab extends PluginSettingTab {
 						this.plugin.settings.tooltipBorderColor = value;
 						borderColorText.setValue(value);
 						await this.plugin.saveSettings();
-						this.plugin.updateStyles();
 					});
 				return borderColorPicker;
 			});
@@ -684,7 +792,6 @@ class HoverRevealSettingTab extends PluginSettingTab {
 						this.plugin.settings.boldTextColor = value;
 						boldColorPicker.setValue(value);
 						await this.plugin.saveSettings();
-						this.plugin.updateStyles();
 					});
 				return boldColorText;
 			})
@@ -695,7 +802,6 @@ class HoverRevealSettingTab extends PluginSettingTab {
 						this.plugin.settings.boldTextColor = value;
 						boldColorText.setValue(value);
 						await this.plugin.saveSettings();
-						this.plugin.updateStyles();
 					});
 				return boldColorPicker;
 			});
