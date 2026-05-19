@@ -151,22 +151,28 @@ export default class HoverRevealPlugin extends Plugin {
 			return;
 		}
 
-		for (const match of matches.reverse()) {
-			this.replacePreviewMatch(element, match, context);
+		const sectionInfo = context.getSectionInfo(element);
+		const sourceMatches = sectionInfo?.text
+			? this.parseHoverRevealMatches(sectionInfo.text)
+			: [];
+		const renderMatches = matches.map((match, index) => ({
+			match,
+			render: sourceMatches[index] ?? match,
+		}));
+
+		for (const entry of renderMatches.reverse()) {
+			this.replacePreviewMatch(element, entry.match, entry.render, context);
 		}
 	}
 
 	private replacePreviewMatch(
 		element: HTMLElement,
 		match: HoverRevealMatch,
+		renderMatch: HoverRevealMatch,
 		context: MarkdownPostProcessorContext
 	): void {
-		const visibleText = match.visibleText;
-		const tooltipText = match.tooltipText;
-		const visibleStart = match.index + 1;
-		const visibleEnd = visibleStart + visibleText.length;
-		const tooltipStart = visibleEnd + 2;
-		const tooltipEnd = tooltipStart + tooltipText.length;
+		const visibleText = renderMatch.visibleText;
+		const tooltipText = renderMatch.tooltipText;
 		const fullEnd = match.index + match.fullMatch.length;
 
 		const fullRange = this.createTextRange(element, match.index, fullEnd);
@@ -174,26 +180,33 @@ export default class HoverRevealPlugin extends Plugin {
 			return;
 		}
 
-		const fullFragment = fullRange.extractContents();
-		const tooltipFragment = this.extractFragmentContents(
-			fullFragment,
-			tooltipStart - match.index,
-			tooltipEnd - match.index
-		);
-		const visibleFragment = this.extractFragmentContents(
-			fullFragment,
-			1,
-			visibleEnd - match.index
-		);
-
 		const { container, trigger, tooltip } = this.createHoverRevealElement(
 			"",
 			false
 		);
-		trigger.insertBefore(visibleFragment, tooltip);
-		tooltip.appendChild(tooltipFragment);
+		const visibleContent = document.createElement("span");
+		trigger.insertBefore(visibleContent, tooltip);
+
+		fullRange.deleteContents();
 		fullRange.insertNode(container);
-		context.addChild(new MarkdownRenderChild(container));
+
+		const visibleChild = new MarkdownRenderChild(visibleContent);
+		context.addChild(visibleChild);
+		void this.renderInlineMarkdown(
+			visibleText,
+			visibleContent,
+			context.sourcePath,
+			visibleChild
+		);
+
+		const tooltipChild = new MarkdownRenderChild(tooltip);
+		context.addChild(tooltipChild);
+		void this.renderTooltipMarkdown(
+			tooltipText,
+			tooltip,
+			context.sourcePath,
+			tooltipChild
+		);
 	}
 
 	private createTextRange(
@@ -246,22 +259,13 @@ export default class HoverRevealPlugin extends Plugin {
 		};
 	}
 
-	private extractFragmentContents(
-		fragment: DocumentFragment,
-		startOffset: number,
-		endOffset: number
-	): DocumentFragment {
-		const range = this.createTextRange(fragment, startOffset, endOffset);
-		if (!range) {
-			return document.createDocumentFragment();
-		}
-
-		return range.extractContents();
-	}
-
 	private createHoverRevealElement(
 		visibleText: string,
-		renderVisibleMarkdown: boolean
+		renderVisibleMarkdown: boolean,
+		renderContext?: {
+			sourcePath: string;
+			component: Plugin | MarkdownRenderChild;
+		}
 	): {
 		container: HTMLSpanElement;
 		trigger: HTMLSpanElement;
@@ -276,8 +280,13 @@ export default class HoverRevealPlugin extends Plugin {
 		if (renderVisibleMarkdown) {
 			const visibleContent = document.createElement("span");
 			trigger.appendChild(visibleContent);
-			void this.renderInlineMarkdown(visibleText, visibleContent, this);
-		} else {
+			void this.renderInlineMarkdown(
+				visibleText,
+				visibleContent,
+				renderContext?.sourcePath ?? "",
+				renderContext?.component ?? this
+			);
+		} else if (visibleText) {
 			trigger.textContent = visibleText;
 		}
 
@@ -294,9 +303,10 @@ export default class HoverRevealPlugin extends Plugin {
 	private async renderInlineMarkdown(
 		markdown: string,
 		container: HTMLElement,
+		sourcePath: string,
 		component: Plugin | MarkdownRenderChild
 	): Promise<void> {
-		await MarkdownRenderer.render(this.app, markdown, container, "", component);
+		await MarkdownRenderer.render(this.app, markdown, container, sourcePath, component);
 		const paragraph = container.firstElementChild;
 		if (
 			container.childElementCount === 1 &&
