@@ -28,6 +28,13 @@ interface HoverRevealSettings {
 	boldTextColor: string;
 }
 
+interface HoverRevealMatch {
+	fullMatch: string;
+	visibleText: string;
+	tooltipText: string;
+	index: number;
+}
+
 const DEFAULT_SETTINGS: HoverRevealSettings = {
 	tooltipTextColor: "var(--text-normal)",
 	tooltipBackgroundColor: "var(--background-primary)",
@@ -35,7 +42,6 @@ const DEFAULT_SETTINGS: HoverRevealSettings = {
 	boldTextColor: "var(--bold-color)",
 };
 
-const HOVER_REVEAL_REGEX = /(?<!\[)\[([^[\]{}]+)\]\{([^}]*)\}/g;
 const HOVER_RESET_DELAY = 200;
 const PREVIEW_SKIP_SELECTOR =
 	".hover-reveal-container, code, pre, script, style";
@@ -94,10 +100,6 @@ export default class HoverRevealPlugin extends Plugin {
 		this.updateStyles();
 	}
 
-	private createHoverRevealRegex(): RegExp {
-		return new RegExp(HOVER_REVEAL_REGEX.source, HOVER_REVEAL_REGEX.flags);
-	}
-
 	private shouldSkipPreviewElement(element: HTMLElement): boolean {
 		return Boolean(element.closest(PREVIEW_SKIP_SELECTOR));
 	}
@@ -144,8 +146,7 @@ export default class HoverRevealPlugin extends Plugin {
 			return;
 		}
 
-		const regex = this.createHoverRevealRegex();
-		const matches = Array.from(text.matchAll(regex));
+		const matches = this.parseHoverRevealMatches(text);
 		if (matches.length === 0) {
 			return;
 		}
@@ -157,20 +158,16 @@ export default class HoverRevealPlugin extends Plugin {
 
 	private replacePreviewMatch(
 		element: HTMLElement,
-		match: RegExpMatchArray,
+		match: HoverRevealMatch,
 		context: MarkdownPostProcessorContext
 	): void {
-		if (match.index === undefined) {
-			return;
-		}
-
-		const visibleText = match[1];
-		const tooltipText = match[2];
+		const visibleText = match.visibleText;
+		const tooltipText = match.tooltipText;
 		const visibleStart = match.index + 1;
 		const visibleEnd = visibleStart + visibleText.length;
 		const tooltipStart = visibleEnd + 2;
 		const tooltipEnd = tooltipStart + tooltipText.length;
-		const fullEnd = match.index + match[0].length;
+		const fullEnd = match.index + match.fullMatch.length;
 
 		const fullRange = this.createTextRange(element, match.index, fullEnd);
 		if (!fullRange) {
@@ -430,28 +427,34 @@ export default class HoverRevealPlugin extends Plugin {
 	private navigateHoverRevealSyntax(editor: Editor): void {
 		const cursor = editor.getCursor();
 		const line = editor.getLine(cursor.line);
-		
-		// Find hover reveal syntax on current line
-		const regex = /\[([^[\]{}]*)\]\{([^}]*)\}/g;
-		let match;
-		let foundMatch = null;
-		
-		while ((match = regex.exec(line)) !== null) {
+
+		const matches = this.parseHoverRevealMatches(line);
+		let foundMatch: {
+			visibleText: string;
+			tooltipText: string;
+			start: number;
+			end: number;
+			visibleStart: number;
+			visibleEnd: number;
+			tooltipStart: number;
+			tooltipEnd: number;
+		} | null = null;
+
+		for (const match of matches) {
 			const matchStart = match.index;
-			const matchEnd = match.index + match[0].length;
-			
-			// Check if cursor is within this match
+			const matchEnd = match.index + match.fullMatch.length;
+
 			if (cursor.ch >= matchStart && cursor.ch <= matchEnd) {
 				foundMatch = {
-					fullMatch: match[0],
-					visibleText: match[1],
-					tooltipText: match[2],
+					visibleText: match.visibleText,
+					tooltipText: match.tooltipText,
 					start: matchStart,
 					end: matchEnd,
-					visibleStart: matchStart + 1, // After [
-					visibleEnd: matchStart + 1 + match[1].length, // Before ]
-					tooltipStart: matchStart + match[1].length + 3, // After ]{
-					tooltipEnd: matchStart + match[1].length + 3 + match[2].length // Before }
+					visibleStart: matchStart + 1,
+					visibleEnd: matchStart + 1 + match.visibleText.length,
+					tooltipStart: matchStart + match.visibleText.length + 3,
+					tooltipEnd:
+						matchStart + match.visibleText.length + 3 + match.tooltipText.length,
 				};
 				break;
 			}
@@ -484,6 +487,78 @@ export default class HoverRevealPlugin extends Plugin {
 		} else {
 			new Notice('No hover reveal syntax found at cursor position');
 		}
+	}
+
+	private parseHoverRevealMatches(text: string): HoverRevealMatch[] {
+		const matches: HoverRevealMatch[] = [];
+		let index = 0;
+
+		while (index < text.length) {
+			const openBracket = text.indexOf("[", index);
+			if (openBracket === -1) {
+				break;
+			}
+
+			if (openBracket > 0 && text[openBracket - 1] === "[") {
+				index = openBracket + 1;
+				continue;
+			}
+
+			let closeBracket = openBracket + 1;
+			let invalidVisible = false;
+			for (; closeBracket < text.length; closeBracket += 1) {
+				const char = text[closeBracket];
+				if (char === "]") {
+					break;
+				}
+				if (char === "[" || char === "{" || char === "}") {
+					invalidVisible = true;
+					break;
+				}
+			}
+
+			if (invalidVisible || closeBracket >= text.length) {
+				index = openBracket + 1;
+				continue;
+			}
+
+			const braceStart = closeBracket + 1;
+			if (text[braceStart] !== "{") {
+				index = closeBracket + 1;
+				continue;
+			}
+
+			let depth = 1;
+			let cursor = braceStart + 1;
+			for (; cursor < text.length && depth > 0; cursor += 1) {
+				const char = text[cursor];
+				if (char === "{") {
+					depth += 1;
+				} else if (char === "}") {
+					depth -= 1;
+				}
+			}
+
+			if (depth !== 0) {
+				index = openBracket + 1;
+				continue;
+			}
+
+			const visibleText = text.slice(openBracket + 1, closeBracket);
+			const tooltipText = text.slice(braceStart + 1, cursor - 1);
+			const fullMatch = text.slice(openBracket, cursor);
+
+			matches.push({
+				fullMatch,
+				visibleText,
+				tooltipText,
+				index: openBracket,
+			});
+
+			index = cursor;
+		}
+
+		return matches;
 	}
 
 	private hoverRevealExtension(): Extension {
@@ -554,11 +629,10 @@ export default class HoverRevealPlugin extends Plugin {
 				buildDecorations(view: EditorView) {
 					const widgets = [];
 					const content = view.state.doc.toString();
-					const regex = plugin.createHoverRevealRegex();
-					let match;
+					const matches = plugin.parseHoverRevealMatches(content);
 
-					while ((match = regex.exec(content)) !== null) {
-						const [fullMatch, visibleText, tooltipText] = match;
+					for (const match of matches) {
+						const { fullMatch, visibleText, tooltipText } = match;
 						const from = match.index;
 						const to = from + fullMatch.length;
 
