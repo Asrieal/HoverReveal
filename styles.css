@@ -35,7 +35,7 @@
     box-sizing: content-box;
     max-height: 150px;
     overflow-y: hidden;
-    z-index: 1000;
+    z-index: 10000;
     opacity: 0;
     transition: opacity 0.2s ease-in-out, visibility 0.2s ease-in-out, padding 0.2s ease-in-out;
 }
