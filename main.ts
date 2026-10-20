@@ -42,6 +42,12 @@ const PREVIEW_SKIP_SELECTOR =
 
 export default class HoverRevealPlugin extends Plugin {
 	settings: HoverRevealSettings;
+	private portalEl: HTMLElement | null = null;
+	private activeTrigger: HTMLElement | null = null;
+	private activeTooltip: HTMLElement | null = null;
+	private hideTimeout: number | null = null;
+	private boundHandleScrollOrResize: ((e: Event) => void) | null = null;
+	private boundHandleKeyDown: ((e: KeyboardEvent) => void) | null = null;
 
 	async onload() {
 		await this.loadSettings();
@@ -72,10 +78,65 @@ export default class HoverRevealPlugin extends Plugin {
 				this.navigateHoverRevealSyntax(editor);
 			}
 		});
+
+		// Global scroll and resize listeners to track trigger position
+		this.boundHandleScrollOrResize = (e: Event) => {
+			if (!this.activeTooltip || !this.activeTrigger) {
+				return;
+			}
+			if (e.target instanceof Node && this.activeTooltip.contains(e.target)) {
+				return;
+			}
+
+			const triggerRect = this.activeTrigger.getBoundingClientRect();
+			if (
+				!this.activeTrigger.isConnected ||
+				triggerRect.bottom < 0 ||
+				triggerRect.top > window.innerHeight ||
+				triggerRect.right < 0 ||
+				triggerRect.left > window.innerWidth
+			) {
+				this.immediateHideActiveTooltip();
+			} else {
+				this.repositionActiveTooltip();
+			}
+		};
+
+		this.boundHandleKeyDown = (e: KeyboardEvent) => {
+			if (e.key === 'Escape' && this.activeTooltip) {
+				this.immediateHideActiveTooltip();
+			}
+		};
+
+		window.addEventListener('scroll', this.boundHandleScrollOrResize, {
+			capture: true,
+			passive: true,
+		});
+		window.addEventListener('resize', this.boundHandleScrollOrResize, {
+			passive: true,
+		});
+		window.addEventListener('keydown', this.boundHandleKeyDown);
 	}
 
 	onunload() {
-		const oldStyle = document.getElementById("hover-reveal-custom-styles");
+		if (this.boundHandleScrollOrResize) {
+			window.removeEventListener('scroll', this.boundHandleScrollOrResize, {
+				capture: true,
+			});
+			window.removeEventListener('resize', this.boundHandleScrollOrResize);
+		}
+		if (this.boundHandleKeyDown) {
+			window.removeEventListener('keydown', this.boundHandleKeyDown);
+		}
+
+		this.immediateHideActiveTooltip();
+
+		if (this.portalEl) {
+			this.portalEl.remove();
+			this.portalEl = null;
+		}
+
+		const oldStyle = document.getElementById('hover-reveal-custom-styles');
 		if (oldStyle) {
 			oldStyle.remove();
 		}
@@ -322,46 +383,175 @@ export default class HoverRevealPlugin extends Plugin {
 			sourcePath,
 			component
 		);
+		if (this.activeTooltip === container) {
+			this.repositionActiveTooltip();
+		}
+	}
+
+	private getOrCreatePortal(): HTMLElement {
+		if (this.portalEl && this.portalEl.isConnected) {
+			return this.portalEl;
+		}
+		let portal = document.getElementById("hover-reveal-portal");
+		if (!portal) {
+			portal = document.createElement("div");
+			portal.id = "hover-reveal-portal";
+			document.body.appendChild(portal);
+		}
+		this.portalEl = portal;
+		return portal;
+	}
+
+	private showTooltip(trigger: HTMLElement, tooltip: HTMLElement): void {
+		this.cancelHideTooltip();
+
+		if (this.activeTooltip && this.activeTooltip !== tooltip) {
+			this.immediateHideActiveTooltip();
+		}
+
+		this.activeTrigger = trigger;
+		this.activeTooltip = tooltip;
+
+		const portal = this.getOrCreatePortal();
+		if (tooltip.parentElement !== portal) {
+			portal.appendChild(tooltip);
+		}
+
+		tooltip.classList.remove("hover-reveal-tooltip-hidden", "hover-reveal-fade-out");
+		tooltip.classList.add("hover-reveal-fade-in");
+
+		this.repositionActiveTooltip();
+	}
+
+	private scheduleHideTooltip(): void {
+		this.cancelHideTooltip();
+		this.hideTimeout = window.setTimeout(() => {
+			this.hideActiveTooltip();
+		}, HOVER_RESET_DELAY);
+	}
+
+	private cancelHideTooltip(): void {
+		if (this.hideTimeout !== null) {
+			window.clearTimeout(this.hideTimeout);
+			this.hideTimeout = null;
+		}
+	}
+
+	private hideActiveTooltip(): void {
+		if (!this.activeTooltip) {
+			return;
+		}
+
+		const tooltip = this.activeTooltip;
+		tooltip.classList.remove("hover-reveal-fade-in");
+		tooltip.classList.add("hover-reveal-fade-out");
+
+		this.hideTimeout = window.setTimeout(() => {
+			this.immediateHideActiveTooltip();
+		}, 150);
+	}
+
+	private immediateHideActiveTooltip(): void {
+		this.cancelHideTooltip();
+		if (!this.activeTooltip) {
+			return;
+		}
+
+		const tooltip = this.activeTooltip;
+		const trigger = this.activeTrigger;
+
+		tooltip.classList.remove("hover-reveal-fade-in", "hover-reveal-fade-out", "is-top", "is-bottom");
+		tooltip.classList.add("hover-reveal-tooltip-hidden");
+
+		if (trigger && trigger.isConnected) {
+			trigger.appendChild(tooltip);
+		} else {
+			tooltip.remove();
+		}
+
+		this.activeTrigger = null;
+		this.activeTooltip = null;
+	}
+
+	private repositionActiveTooltip(): void {
+		if (!this.activeTrigger || !this.activeTooltip) {
+			return;
+		}
+
+		if (!this.activeTrigger.isConnected) {
+			this.immediateHideActiveTooltip();
+			return;
+		}
+
+		const triggerRect = this.activeTrigger.getBoundingClientRect();
+		const tooltip = this.activeTooltip;
+
+		if (triggerRect.width === 0 && triggerRect.height === 0) {
+			return;
+		}
+
+		const tooltipRect = tooltip.getBoundingClientRect();
+		const tooltipWidth = tooltipRect.width;
+		const tooltipHeight = tooltipRect.height;
+		if (tooltipWidth === 0 && tooltipHeight === 0) {
+			return;
+		}
+
+		const viewportWidth = window.innerWidth;
+		const viewportHeight = window.innerHeight;
+		const GAP = 8;
+		const MARGIN = 10;
+
+		const spaceAbove = triggerRect.top;
+		const spaceBelow = viewportHeight - triggerRect.bottom;
+
+		let placeBelow = false;
+		if (spaceAbove < tooltipHeight + GAP + MARGIN && spaceBelow >= tooltipHeight + GAP + MARGIN) {
+			placeBelow = true;
+		} else if (spaceAbove < tooltipHeight + GAP + MARGIN && spaceBelow > spaceAbove) {
+			placeBelow = true;
+		}
+
+		let top: number;
+		if (placeBelow) {
+			top = triggerRect.bottom + GAP;
+			tooltip.classList.add("is-bottom");
+			tooltip.classList.remove("is-top");
+		} else {
+			top = triggerRect.top - tooltipHeight - GAP;
+			tooltip.classList.add("is-top");
+			tooltip.classList.remove("is-bottom");
+		}
+
+		let left = triggerRect.left + (triggerRect.width - tooltipWidth) / 2;
+		if (left < MARGIN) {
+			left = MARGIN;
+		} else if (left + tooltipWidth > viewportWidth - MARGIN) {
+			left = viewportWidth - MARGIN - tooltipWidth;
+		}
+
+		const triggerCenter = triggerRect.left + triggerRect.width / 2;
+		let arrowLeft = triggerCenter - left;
+		const minArrow = 12;
+		const maxArrow = Math.max(minArrow, tooltipWidth - 12);
+		arrowLeft = Math.max(minArrow, Math.min(maxArrow, arrowLeft));
+
+		tooltip.style.setProperty("--arrow-left", `${Math.round(arrowLeft)}px`);
+		tooltip.style.top = `${Math.round(top)}px`;
+		tooltip.style.left = `${Math.round(left)}px`;
 	}
 
 	private attachTooltipHoverHandlers(
 		trigger: HTMLElement,
 		tooltip: HTMLElement
 	): void {
-		const adjustTooltipPosition = () => {
-			const tooltipRect = tooltip.getBoundingClientRect();
-			if (tooltipRect.width === 0) {
-				return;
-			}
+		tooltip.classList.add("hover-reveal-tooltip-hidden");
 
-			const mainContentArea = document.querySelector(
-				".workspace-split.mod-vertical.mod-root"
-			) as HTMLElement | null;
-			if (!mainContentArea) {
-				return;
-			}
-
-			const mainContentRect = mainContentArea.getBoundingClientRect();
-			if (tooltipRect.left < mainContentRect.left) {
-				tooltip.style.left = "0";
-				tooltip.style.right = "auto";
-				tooltip.style.transform = "translateX(0)";
-			} else if (tooltipRect.right > mainContentRect.right) {
-				tooltip.style.left = "auto";
-				tooltip.style.right = "0";
-				tooltip.style.transform = "translateX(0)";
-			}
+		const onMouseEnter = () => {
+			this.showTooltip(trigger, tooltip);
 		};
 
-		const resetTooltipPosition = () => {
-			tooltip.style.left = "50%";
-			tooltip.style.right = "auto";
-			tooltip.style.transform = "translateX(-50%)";
-			tooltip.style.visibility = "";
-			tooltip.style.opacity = "";
-		};
-
-		const hideTooltip = (event: MouseEvent) => {
+		const onMouseLeave = (event: MouseEvent) => {
 			const relatedTarget = event.relatedTarget;
 			if (
 				relatedTarget instanceof Node &&
@@ -369,23 +559,26 @@ export default class HoverRevealPlugin extends Plugin {
 			) {
 				return;
 			}
-
-			tooltip.style.visibility = "hidden";
-			tooltip.style.opacity = "0";
-
-			window.setTimeout(() => {
-				if (trigger.matches(":hover") || tooltip.matches(":hover")) {
-					return;
-				}
-
-				resetTooltipPosition();
-			}, HOVER_RESET_DELAY);
+			this.scheduleHideTooltip();
 		};
 
-		trigger.addEventListener("mouseenter", adjustTooltipPosition);
-		trigger.addEventListener("mouseleave", hideTooltip);
-		tooltip.addEventListener("mouseenter", adjustTooltipPosition);
-		tooltip.addEventListener("mouseleave", hideTooltip);
+		trigger.addEventListener("mouseenter", onMouseEnter);
+		trigger.addEventListener("mouseleave", onMouseLeave);
+
+		tooltip.addEventListener("mouseenter", () => {
+			this.cancelHideTooltip();
+		});
+
+		tooltip.addEventListener("mouseleave", (event: MouseEvent) => {
+			const relatedTarget = event.relatedTarget;
+			if (
+				relatedTarget instanceof Node &&
+				(trigger.contains(relatedTarget) || tooltip.contains(relatedTarget))
+			) {
+				return;
+			}
+			this.scheduleHideTooltip();
+		});
 	}
 
 	// Method to insert hover reveal syntax
@@ -603,8 +796,12 @@ export default class HoverRevealPlugin extends Plugin {
 				background-color: ${this.settings.tooltipBackgroundColor} !important;
 				border-color: ${this.settings.tooltipBorderColor} !important;
 			}
-			.hover-reveal-tooltip::after {
+			.hover-reveal-tooltip.is-top::after,
+			.hover-reveal-tooltip:not(.is-bottom)::after {
 				border-top-color: ${this.settings.tooltipBackgroundColor} !important;
+			}
+			.hover-reveal-tooltip.is-bottom::after {
+				border-bottom-color: ${this.settings.tooltipBackgroundColor} !important;
 			}
 			.hover-reveal {
 				color: ${this.settings.boldTextColor} !important;

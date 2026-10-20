@@ -1,3 +1,15 @@
+/* Portal layer in document.body to escape overflow:hidden of callouts and tables */
+#hover-reveal-portal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 0;
+    height: 0;
+    z-index: 10000;
+    pointer-events: none;
+}
+
+.hover-reveal,
 .workspace-leaf-content .hover-reveal {
     position: relative;
     text-decoration: underline;
@@ -10,59 +22,88 @@
     cursor: pointer;
 }
 
+.hover-reveal-container,
+.workspace-leaf-content .hover-reveal-container {
+    position: relative;
+    display: inline-block;
+    cursor: pointer;
+}
 
-.workspace-leaf-content .hover-reveal-tooltip {
-    visibility: hidden;
-    position: absolute;
-    bottom: 100%;
-    left: 50%;
-    transform: translateX(-50%);
-    padding: 3px 10px;	
-    
+/* Tooltip container styling */
+.hover-reveal-tooltip {
+    position: fixed;
+    box-sizing: border-box;
+    padding: 4px 10px;
     background-color: var(--background-primary);
     border: 1px solid var(--background-modifier-border);
     color: var(--text-normal);
     border-radius: 4px;
     font-size: 0.9em;
     font-weight: normal;
-	
     white-space: normal;
     word-break: normal;
     overflow-wrap: break-word;
     display: inline-block;
     width: max-content;
     max-width: 400px;
-    box-sizing: content-box;
-    max-height: 150px;
+    max-height: 200px;
     overflow-y: hidden;
-    z-index: 1000;
+    z-index: 10000;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.2);
+    pointer-events: auto;
     opacity: 0;
-    transition: opacity 0.2s ease-in-out, visibility 0.2s ease-in-out, padding 0.2s ease-in-out;
+    visibility: hidden;
+    transition: opacity 0.15s ease-in-out, visibility 0.15s ease-in-out;
 }
 
-.workspace-leaf-content .hover-reveal-tooltip:hover {
+/* Markdown typography inside tooltip */
+.hover-reveal-tooltip p {
+    margin: 0;
+}
+
+.hover-reveal-tooltip p + p {
+    margin-top: 0.5em;
+}
+
+/* Inactive tooltip inside trigger (hidden from layout) */
+.hover-reveal-tooltip.hover-reveal-tooltip-hidden {
+    display: none !important;
+}
+
+/* Fade in/out states */
+.hover-reveal-tooltip.hover-reveal-fade-in {
+    opacity: 1;
+    visibility: visible;
+}
+
+.hover-reveal-tooltip.hover-reveal-fade-out {
+    opacity: 0;
+    visibility: hidden;
+}
+
+.hover-reveal-tooltip:hover {
     overflow-y: auto;
 }
 
-.workspace-leaf-content .hover-reveal:hover .hover-reveal-tooltip {
-    visibility: visible; 
-    opacity: 1; 
+/* Arrow pointer */
+.hover-reveal-tooltip::after {
+    content: '';
+    position: absolute;
+    left: var(--arrow-left, 50%);
+    transform: translateX(-50%);
+    border: 6px solid transparent;
+    pointer-events: none;
 }
 
-.workspace-leaf-content .hover-reveal-tooltip::after {
-    content: ''; 
-    position: absolute;
-    top: 100%; 
-    left: 50%; 
-    transform: translateX(-50%);
-    border: 5px solid transparent;
+.hover-reveal-tooltip.is-top::after,
+.hover-reveal-tooltip:not(.is-bottom)::after {
+    top: 100%;
     border-top-color: var(--background-primary);
 }
 
-.workspace-leaf-content .hover-reveal-container {
-    position: relative;
-    display: inline-block;
-    cursor: pointer;
+.hover-reveal-tooltip.is-bottom::after {
+    bottom: 100%;
+    border-bottom-color: var(--background-primary);
 }
 
 .hover-reveal-reset-button {
